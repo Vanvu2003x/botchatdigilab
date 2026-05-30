@@ -9,6 +9,7 @@ let activeThread = null;
 let allThreads = [];
 let activeMessages = [];
 let allDocuments = [];
+let allRegistrations = [];
 let systemBotEnabled = true;
 
 // DOM Elements
@@ -26,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadKnowledge();
   await loadThreads(); // Load threads initially
   await loadLearnedKnowledge(); // Load learned knowledge
+  await loadRegistrations(true); // Load registrations initially
   
   // Socket.io Real-time update triggers
   initSocketIO();
@@ -184,6 +186,11 @@ function updateTopbarText(tabId) {
     case 'tab-live-chat':
       tabTitle.textContent = 'Hộp thư Live Chat & Simulator';
       tabDesc.textContent = 'Trò chuyện trực tiếp với khách hàng và giả lập gỡ lỗi AI chatbot.';
+      break;
+    case 'tab-registrations':
+      tabTitle.textContent = 'Thống kê chốt đơn & đăng ký';
+      tabDesc.textContent = 'Danh sách khách hàng để lại số điện thoại đăng ký học.';
+      loadRegistrations();
       break;
     case 'tab-config':
       tabTitle.textContent = 'Cấu hình API kết nối';
@@ -1330,6 +1337,38 @@ function initSocketIO() {
       applySystemStatus(payload.botEnabled);
     }
   });
+
+  socket.on('registration_added', (reg) => {
+    allRegistrations.unshift(reg);
+    updateRegistrationStats(allRegistrations);
+    
+    const regTabActive = document.getElementById('tab-registrations').classList.contains('active');
+    if (regTabActive) {
+      filterRegistrations();
+    }
+    showToast(`🎉 Đăng ký học mới từ ${reg.name} (${reg.phone})!`, 'success');
+  });
+
+  socket.on('registration_updated', (updatedItem) => {
+    const idx = allRegistrations.findIndex(r => r.id === updatedItem.id);
+    if (idx !== -1) {
+      allRegistrations[idx] = updatedItem;
+      updateRegistrationStats(allRegistrations);
+      const regTabActive = document.getElementById('tab-registrations').classList.contains('active');
+      if (regTabActive) {
+        filterRegistrations();
+      }
+    }
+  });
+
+  socket.on('registration_deleted', (deletedId) => {
+    allRegistrations = allRegistrations.filter(r => r.id !== deletedId);
+    updateRegistrationStats(allRegistrations);
+    const regTabActive = document.getElementById('tab-registrations').classList.contains('active');
+    if (regTabActive) {
+      filterRegistrations();
+    }
+  });
 }
 
 // 13. Learned Knowledge Manager (RAG Auto-Learn)
@@ -1388,5 +1427,244 @@ async function clearLearnedKnowledge() {
     }
   } catch (err) {
     showToast('Lỗi kết nối tới server.', 'error');
+  }
+}
+
+// 14. Registrations & Leads Management (Thống kê chốt đơn)
+async function loadRegistrations(silent = false) {
+  try {
+    const res = await fetch('/api/registrations');
+    if (!res.ok) throw new Error();
+    allRegistrations = await res.json();
+    
+    // Update stats cards in UI
+    updateRegistrationStats(allRegistrations);
+    
+    // Render list
+    renderRegistrationsList(allRegistrations);
+    
+    if (!silent) console.log('Registrations loaded from server');
+  } catch (err) {
+    if (!silent) showToast('Lỗi khi tải danh sách đăng ký học.', 'error');
+  }
+}
+
+function updateRegistrationStats(list) {
+  const total = list.length;
+  const messenger = list.filter(r => r.platform === 'messenger').length;
+  const whatsapp = list.filter(r => r.platform === 'whatsapp').length;
+  const closed = list.filter(r => r.status === 'Đã chốt đơn').length;
+  
+  const totalEl = document.getElementById('stat-reg-total');
+  const messengerEl = document.getElementById('stat-reg-messenger');
+  const whatsappEl = document.getElementById('stat-reg-whatsapp');
+  const closedEl = document.getElementById('stat-reg-closed');
+  
+  if (totalEl) totalEl.textContent = total;
+  if (messengerEl) messengerEl.textContent = messenger;
+  if (whatsappEl) whatsappEl.textContent = whatsapp;
+  if (closedEl) closedEl.textContent = closed;
+
+  // Update funnel stats
+  updateFunnelAnalytics();
+}
+
+function renderRegistrationsList(list) {
+  const container = document.getElementById('registrations-table-body');
+  if (!container) return;
+  container.innerHTML = '';
+  
+  if (!list || list.length === 0) {
+    container.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px; font-size: 13px;">Chưa ghi nhận lượt đăng ký học nào.</td></tr>`;
+    return;
+  }
+  
+  list.forEach(item => {
+    const tr = document.createElement('tr');
+    tr.style = 'border-bottom: 1px solid var(--border-color); transition: background-color 0.2s;';
+    
+    const timeStr = new Date(item.timestamp).toLocaleString('vi-VN');
+    
+    // Platform badge
+    let platformBadge = `<span class="badge-platform sys">Chưa rõ</span>`;
+    if (item.platform === 'messenger') {
+      platformBadge = `<span class="badge-platform messenger"><i class="fa-brands fa-facebook-messenger"></i> FB</span>`;
+    } else if (item.platform === 'whatsapp') {
+      platformBadge = `<span class="badge-platform whatsapp"><i class="fa-brands fa-whatsapp"></i> WA</span>`;
+    } else if (item.platform === 'test') {
+      platformBadge = `<span class="badge-platform test"><i class="fa-solid fa-flask"></i> Sim</span>`;
+    }
+    
+    // Status select element with direct onchange handler
+    const statuses = ['Chờ tư vấn', 'Đang tư vấn', 'Đã chốt đơn', 'Từ chối'];
+    let statusOptions = statuses.map(s => `
+      <option value="${s}" ${item.status === s ? 'selected' : ''}>${s}</option>
+    `).join('');
+    
+    // Status text color based on value
+    let statusSelectClass = 'select-status-waiting';
+    if (item.status === 'Đang tư vấn') statusSelectClass = 'select-status-inprogress';
+    if (item.status === 'Đã chốt đơn') statusSelectClass = 'select-status-success';
+    if (item.status === 'Từ chối') statusSelectClass = 'select-status-danger';
+
+    tr.innerHTML = `
+      <td style="padding: 14px 16px; font-weight: 600;">${escapeHtml(item.name)}</td>
+      <td style="padding: 14px 16px; font-weight: 500; color: var(--primary-light);">${escapeHtml(item.phone)}</td>
+      <td style="padding: 14px 16px;">${platformBadge}</td>
+      <td style="padding: 14px 16px; color: var(--text-secondary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.text)}">${escapeHtml(item.text)}</td>
+      <td style="padding: 14px 16px; color: var(--text-muted); font-size: 11.5px;">${timeStr}</td>
+      <td style="padding: 14px 16px;">
+        <select class="custom-select status-select-el ${statusSelectClass}" onchange="changeRegistrationStatus('${item.id}', this.value)" style="margin-bottom: 0; padding: 4px 8px; font-size: 12px; width: 120px; font-weight: 600;">
+          ${statusOptions}
+        </select>
+      </td>
+      <td style="padding: 14px 16px; text-align: right;">
+        <button class="btn-icon-only delete-btn" onclick="deleteRegistration('${item.id}')" title="Xóa khách hàng" style="width: 28px; height: 28px;">
+          <i class="fa-regular fa-trash-can"></i>
+        </button>
+      </td>
+    `;
+    
+    container.appendChild(tr);
+  });
+}
+
+function filterRegistrations() {
+  const platformFilter = document.getElementById('filter-reg-platform').value;
+  const statusFilter = document.getElementById('filter-reg-status').value;
+  
+  let filtered = allRegistrations;
+  if (platformFilter !== 'all') {
+    filtered = filtered.filter(r => r.platform === platformFilter);
+  }
+  if (statusFilter !== 'all') {
+    filtered = filtered.filter(r => r.status === statusFilter);
+  }
+  
+  renderRegistrationsList(filtered);
+}
+
+async function changeRegistrationStatus(id, newStatus) {
+  try {
+    const res = await fetch(`/api/registrations/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    });
+    
+    const result = await res.json();
+    if (res.ok && result.success) {
+      showToast(`Đã chuyển trạng thái sang "${newStatus}".`, 'success');
+      // Update local state item to keep stats consistent
+      const item = allRegistrations.find(r => r.id === id);
+      if (item) {
+        item.status = newStatus;
+        updateRegistrationStats(allRegistrations);
+        
+        // Re-apply current filtering to keep view clean
+        filterRegistrations();
+      }
+    } else {
+      showToast('Không thể cập nhật trạng thái.', 'error');
+    }
+  } catch (err) {
+    showToast('Lỗi mạng khi cập nhật trạng thái.', 'error');
+  }
+}
+
+async function deleteRegistration(id) {
+  if (!confirm('Bạn có chắc muốn xóa lượt đăng ký này khỏi hệ thống không?')) return;
+  
+  try {
+    const res = await fetch(`/api/registrations/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Đã xóa lượt đăng ký thành công.', 'success');
+      allRegistrations = allRegistrations.filter(r => r.id !== id);
+      updateRegistrationStats(allRegistrations);
+      filterRegistrations();
+    } else {
+      showToast('Không thể xóa lượt đăng ký.', 'error');
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối tới server.', 'error');
+  }
+}
+
+// 15. Customer Funnel Analytics & Conversion Rates
+function calculateCustomerAnalytics() {
+  const list = allThreads.filter(t => t.id !== 'tester');
+  const regs = allRegistrations;
+  
+  let closedCount = 0;
+  let consultingCount = 0;
+  let rejectedCount = 0;
+  let inquiringCount = 0;
+  let newCount = 0;
+  
+  list.forEach(t => {
+    const reg = regs.find(r => r.customerId === t.id);
+    if (reg) {
+      if (reg.status === 'Đã chốt đơn') {
+        closedCount++;
+      } else if (reg.status === 'Từ chối') {
+        rejectedCount++;
+      } else {
+        consultingCount++;
+      }
+    } else {
+      const userLogsCount = allLogs.filter(l => 
+        l.type === 'message' && 
+        (l.sender === t.id || l.recipient === t.id)
+      ).length;
+      
+      if (userLogsCount <= 2) {
+        newCount++;
+      } else {
+        inquiringCount++;
+      }
+    }
+  });
+
+  return {
+    totalCustomers: list.length,
+    closed: closedCount,
+    consulting: consultingCount + inquiringCount,
+    rejected: rejectedCount,
+    newLeads: newCount
+  };
+}
+
+function updateFunnelAnalytics() {
+  const stats = calculateCustomerAnalytics();
+  
+  const totalInboxesEl = document.getElementById('analytics-total-inboxes');
+  const totalConsultingEl = document.getElementById('analytics-total-consulting');
+  const totalClosedEl = document.getElementById('analytics-total-closed');
+  const totalRejectedEl = document.getElementById('analytics-total-rejected');
+  const rateEl = document.getElementById('analytics-conversion-rate');
+  
+  const barConsulting = document.getElementById('bar-total-consulting');
+  const barClosed = document.getElementById('bar-total-closed');
+  const barRejected = document.getElementById('bar-total-rejected');
+  
+  if (totalInboxesEl) totalInboxesEl.textContent = `${stats.totalCustomers} người`;
+  if (totalConsultingEl) totalConsultingEl.textContent = `${stats.consulting} người`;
+  if (totalClosedEl) totalClosedEl.textContent = `${stats.closed} người`;
+  if (totalRejectedEl) totalRejectedEl.textContent = `${stats.rejected} người`;
+  
+  const rate = stats.totalCustomers > 0 ? Math.round((stats.closed / stats.totalCustomers) * 100) : 0;
+  if (rateEl) rateEl.textContent = `${rate}%`;
+  
+  if (barConsulting) {
+    const pct = stats.totalCustomers > 0 ? (stats.consulting / stats.totalCustomers) * 100 : 0;
+    barConsulting.style.width = `${pct}%`;
+  }
+  if (barClosed) {
+    const pct = stats.totalCustomers > 0 ? (stats.closed / stats.totalCustomers) * 100 : 0;
+    barClosed.style.width = `${pct}%`;
+  }
+  if (barRejected) {
+    const pct = stats.totalCustomers > 0 ? (stats.rejected / stats.totalCustomers) * 100 : 0;
+    barRejected.style.width = `${pct}%`;
   }
 }

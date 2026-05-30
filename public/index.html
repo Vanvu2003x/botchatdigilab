@@ -36,6 +36,10 @@
           <i class="fa-solid fa-comments"></i>
           <span>Hộp thư Live Chat</span>
         </a>
+        <a href="#" class="nav-item" data-tab="tab-registrations" id="nav-registrations">
+          <i class="fa-solid fa-user-graduate"></i>
+          <span>Thống kê đăng ký</span>
+        </a>
         <a href="#" class="nav-item" data-tab="tab-config" id="nav-config">
           <i class="fa-solid fa-gears"></i>
           <span>Cấu hình API</span>
@@ -243,6 +247,162 @@
                   <i class="fa-solid fa-paper-plane"></i>
                 </button>
               </form>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: REGISTRATIONS / LEADS -->
+        <section id="tab-registrations" class="tab-view">
+          <!-- Stats Summary Grid -->
+          <div class="stats-grid" style="margin-bottom: 24px;">
+            <div class="stat-card glass-panel">
+              <div class="stat-icon sent" style="background-color: rgba(79, 70, 229, 0.1); color: rgb(129, 140, 248);">
+                <i class="fa-solid fa-user-graduate"></i>
+              </div>
+              <div class="stat-data">
+                <span class="stat-label">Tổng số đăng ký</span>
+                <h3 class="stat-value" id="stat-reg-total">0</h3>
+              </div>
+            </div>
+            
+            <div class="stat-card glass-panel">
+              <div class="stat-icon received" style="background-color: rgba(59, 130, 246, 0.1); color: rgb(96, 165, 250);">
+                <i class="fa-brands fa-facebook-messenger"></i>
+              </div>
+              <div class="stat-data">
+                <span class="stat-label">Từ Messenger</span>
+                <h3 class="stat-value" id="stat-reg-messenger">0</h3>
+              </div>
+            </div>
+            
+            <div class="stat-card glass-panel">
+              <div class="stat-icon reply" style="background-color: rgba(16, 185, 129, 0.1); color: rgb(52, 211, 153);">
+                <i class="fa-brands fa-whatsapp"></i>
+              </div>
+              <div class="stat-data">
+                <span class="stat-label">Từ WhatsApp</span>
+                <h3 class="stat-value" id="stat-reg-whatsapp">0</h3>
+              </div>
+            </div>
+
+            <div class="stat-card glass-panel">
+              <div class="stat-icon error" style="background-color: rgba(245, 158, 11, 0.1); color: rgb(251, 191, 36);">
+                <i class="fa-solid fa-circle-check"></i>
+              </div>
+              <div class="stat-data">
+                <span class="stat-label">Đã chốt đơn</span>
+                <h3 class="stat-value" id="stat-reg-closed">0</h3>
+              </div>
+            </div>
+          </div>
+
+          <!-- Customer Analytics & Funnel -->
+          <div class="glass-panel" style="padding: 24px; margin-bottom: 24px;">
+            <div class="panel-header" style="margin-bottom: 20px;">
+              <h3 style="font-size: 16px; margin: 0; color: #fff;"><i class="fa-solid fa-chart-bar text-gradient" style="margin-right: 8px;"></i>Phân tích phễu khách hàng & Tỷ lệ chốt</h3>
+            </div>
+            
+            <div class="analytics-grid" style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: center;">
+              <!-- Funnel summary text -->
+              <div class="analytics-summary-card" style="background: rgba(0,0,0,0.15); padding: 20px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 15px;">
+                <div style="font-size: 13px; color: var(--text-secondary);">Tỷ lệ chốt đơn của Trung tâm:</div>
+                <div style="display: flex; align-items: baseline; gap: 8px;">
+                  <span id="analytics-conversion-rate" style="font-size: 36px; font-weight: 800; color: var(--success);">0%</span>
+                  <span style="font-size: 12px; color: var(--text-muted);">trong tổng số người nhắn</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+                  Tỷ lệ này dựa trên số khách hàng đã gửi Số điện thoại và được đánh dấu là <strong>"Đã chốt đơn"</strong> trên tổng số khách tương tác.
+                </div>
+              </div>
+              
+              <!-- Funnel Progress Bars -->
+              <div class="analytics-bars-card" style="display: flex; flex-direction: column; gap: 16px;">
+                <!-- Total Inboxes -->
+                <div class="progress-bar-item">
+                  <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;">
+                    <span>Tổng số người nhắn (Inboxes)</span>
+                    <span id="analytics-total-inboxes" style="color: #fff;">0 người</span>
+                  </div>
+                  <div style="background-color: rgba(255,255,255,0.06); height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border-color);">
+                    <div id="bar-total-inboxes" style="background: linear-gradient(90deg, var(--primary), var(--accent)); width: 100%; height: 100%; border-radius: 5px;"></div>
+                  </div>
+                </div>
+
+                <!-- Hesitant / Inquiring -->
+                <div class="progress-bar-item">
+                  <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;">
+                    <span>Khách đang phân vân / Đang tư vấn</span>
+                    <span id="analytics-total-consulting" style="color: rgb(251, 191, 36);">0 người</span>
+                  </div>
+                  <div style="background-color: rgba(255,255,255,0.06); height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border-color);">
+                    <div id="bar-total-consulting" style="background: rgb(251, 191, 36); width: 0%; height: 100%; border-radius: 5px; transition: width 0.4s ease;"></div>
+                  </div>
+                </div>
+
+                <!-- Closed -->
+                <div class="progress-bar-item">
+                  <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;">
+                    <span>Đã chốt đơn đăng ký</span>
+                    <span id="analytics-total-closed" style="color: var(--success);">0 người</span>
+                  </div>
+                  <div style="background-color: rgba(255,255,255,0.06); height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border-color);">
+                    <div id="bar-total-closed" style="background: var(--success); width: 0%; height: 100%; border-radius: 5px; transition: width 0.4s ease;"></div>
+                  </div>
+                </div>
+
+                <!-- Rejected -->
+                <div class="progress-bar-item">
+                  <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px;">
+                    <span>Không chốt / Từ chối</span>
+                    <span id="analytics-total-rejected" style="color: var(--danger);">0 người</span>
+                  </div>
+                  <div style="background-color: rgba(255,255,255,0.06); height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border-color);">
+                    <div id="bar-total-rejected" style="background: var(--danger); width: 0%; height: 100%; border-radius: 5px; transition: width 0.4s ease;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Registrations Table Card -->
+          <div class="glass-panel" style="padding: 24px;">
+            <div class="panel-header flex-row justify-between align-center" style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+              <h3 style="font-size: 16px; margin: 0; color: #fff;"><i class="fa-solid fa-address-book text-gradient" style="margin-right: 8px;"></i>Danh sách khách hàng chốt đơn</h3>
+              <div class="header-actions flex-row gap-10" style="display: flex; gap: 10px; align-items: center;">
+                <select id="filter-reg-platform" class="custom-select" onchange="filterRegistrations()" style="width: auto; padding: 6px 12px; font-size: 12px; margin-bottom: 0;">
+                  <option value="all">Tất cả nền tảng</option>
+                  <option value="messenger">Messenger</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="test">Simulator</option>
+                </select>
+                <select id="filter-reg-status" class="custom-select" onchange="filterRegistrations()" style="width: auto; padding: 6px 12px; font-size: 12px; margin-bottom: 0;">
+                  <option value="all">Tất cả trạng thái</option>
+                  <option value="Chờ tư vấn">Chờ tư vấn</option>
+                  <option value="Đang tư vấn">Đang tư vấn</option>
+                  <option value="Đã chốt đơn">Đã chốt đơn</option>
+                  <option value="Từ chối">Từ chối</option>
+                </select>
+                <button class="btn btn-sm btn-secondary" onclick="loadRegistrations()" style="padding: 6px 12px; font-size: 12px;"><i class="fa-solid fa-arrows-rotate"></i> Làm mới</button>
+              </div>
+            </div>
+
+            <div style="overflow-x: auto; width: 100%;">
+              <table class="data-table" id="registrations-table" style="width: 100%; border-collapse: collapse; text-align: left;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary); font-size: 13px;">
+                    <th style="padding: 12px 16px;">Tên khách hàng</th>
+                    <th style="padding: 12px 16px;">Số điện thoại</th>
+                    <th style="padding: 12px 16px;">Nền tảng</th>
+                    <th style="padding: 12px 16px; width: 35%;">Tin nhắn chứa SĐT</th>
+                    <th style="padding: 12px 16px;">Thời gian</th>
+                    <th style="padding: 12px 16px;">Trạng thái</th>
+                    <th style="padding: 12px 16px; text-align: right;">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody id="registrations-table-body" style="font-size: 13px; color: #fff;">
+                  <!-- Dynamic content loaded via JS -->
+                </tbody>
+              </table>
             </div>
           </div>
         </section>

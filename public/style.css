@@ -1430,3 +1430,36 @@ code {
   border-radius: 4px;
   border: 1px solid rgba(245, 158, 11, 0.25);
 }
+
+/* Registrations status dropdown */
+.status-select-el {
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.status-select-el.select-status-waiting {
+  background-color: rgba(79, 70, 229, 0.15) !important;
+  color: rgb(129, 140, 248) !important;
+  border-color: rgba(79, 70, 229, 0.3) !important;
+}
+
+.status-select-el.select-status-inprogress {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  color: rgb(96, 165, 250) !important;
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
+
+.status-select-el.select-status-success {
+  background-color: rgba(16, 185, 129, 0.15) !important;
+  color: rgb(52, 211, 153) !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+.status-select-el.select-status-danger {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+  color: rgb(248, 113, 113) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
