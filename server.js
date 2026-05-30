@@ -27,6 +27,7 @@ const logsPath = path.join(__dirname, 'data', 'logs.json');
 const knowledgePath = path.join(__dirname, 'data', 'knowledge.json');
 const knowledgeEmbeddingsPath = path.join(__dirname, 'data', 'knowledge_embeddings.json');
 const learnedEmbeddingsPath = path.join(__dirname, 'data', 'learned_embeddings.json');
+const registrationsPath = path.join(__dirname, 'data', 'registrations.json');
 const publicPath = path.join(__dirname, 'public');
 const loginPagePath = path.join(publicPath, 'login.html');
 const setupPagePath = path.join(publicPath, 'setup.html');
@@ -156,6 +157,9 @@ const initDB = async () => {
   }
   if (!await fs.pathExists(learnedEmbeddingsPath)) {
     await fs.writeJson(learnedEmbeddingsPath, []);
+  }
+  if (!await fs.pathExists(registrationsPath)) {
+    await fs.writeJson(registrationsPath, []);
   }
   const activeThreadsPath = path.join(__dirname, 'data', 'active_threads.json');
   if (!await fs.pathExists(activeThreadsPath)) {
@@ -371,6 +375,18 @@ async function logActivity({ direction, platform, type, sender, recipient, text,
 }
 
 
+
+// Fetch Facebook User Name by ID
+async function getFacebookUserName(senderId, accessToken) {
+  try {
+    const url = `https://graph.facebook.com/v20.0/${senderId}?fields=name&access_token=${accessToken}`;
+    const response = await axios.get(url, { timeout: 5000 });
+    return response.data?.name || `Người dùng (${senderId})`;
+  } catch (err) {
+    console.error('Failed to get Facebook user name:', err.message);
+    return `Người dùng (${senderId})`;
+  }
+}
 
 // Meta Message Sender Logic
 async function sendMessage(recipient, text, platform, options = {}) {
@@ -1015,8 +1031,91 @@ async function generateAIResponse(userMessage) {
   }
 }
 
+// Check if user is asking to speak to admin/human
+function isRequestingAdmin(text) {
+  if (typeof text !== 'string') return false;
+  const normalized = text.toLowerCase().normalize("NFC");
+  const keywords = [
+    'gặp admin', 'gap admin',
+    'gặp ad', 'gap ad',
+    'gặp nhân viên', 'gap nhan vien',
+    'gặp tư vấn', 'gap tu van',
+    'gặp người thật', 'gap nguoi that',
+    'nói chuyện với người', 'noi chuyen voi nguoi',
+    'liên hệ admin', 'lien he admin',
+    'chat với admin', 'chat voi admin',
+    'gặp trực tiếp', 'gap truc tiep',
+    'hỗ trợ viên', 'ho tro vien',
+    'nhân viên hỗ trợ', 'nhan vien ho tro',
+    'gặp cskh', 'gap cskh'
+  ];
+  return keywords.some(keyword => normalized.includes(keyword));
+}
+
+// Set adminReplying = true for a customer thread
+async function setThreadAdminReplying(customerId, value) {
+  try {
+    const threadsFile = path.join(__dirname, 'data', 'active_threads.json');
+    const threads = await fs.readJson(threadsFile).catch(() => []);
+    let thread = threads.find(t => t.id === customerId);
+    if (thread) {
+      thread.adminReplying = value;
+      await fs.writeJson(threadsFile, threads);
+      if (typeof io !== 'undefined') {
+        io.emit('thread_status_updated', { id: customerId, adminReplying: value });
+      }
+    }
+  } catch (err) {
+    console.error('Failed to set thread adminReplying:', err);
+  }
+}
+
+// Extract Vietnamese phone number from text
+function extractPhoneNumber(text) {
+  if (typeof text !== 'string') return null;
+  const phoneRegex = /(?:\+84|0)(?:\s*\d){9,10}\b/;
+  const match = text.match(phoneRegex);
+  return match ? match[0].replace(/\s+/g, '') : null;
+}
+
+// Add a registration/lead to the database
+async function addRegistration({ name, phone, platform, customerId, text }) {
+  try {
+    const list = await fs.readJson(registrationsPath).catch(() => []);
+    // Prevent duplicate entries of the same phone number
+    const exists = list.find(r => r.phone === phone);
+    if (exists) {
+      exists.lastTimestamp = new Date().toISOString();
+      exists.text = text;
+      await fs.writeJson(registrationsPath, list);
+      return false; 
+    }
+    
+    const newReg = {
+      id: 'reg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      name,
+      phone,
+      platform,
+      customerId,
+      text,
+      timestamp: new Date().toISOString(),
+      status: 'Chờ tư vấn'
+    };
+    list.unshift(newReg);
+    await fs.writeJson(registrationsPath, list);
+    
+    if (typeof io !== 'undefined') {
+      io.emit('registration_added', newReg);
+    }
+    return newReg;
+  } catch (err) {
+    console.error('Failed to add registration:', err);
+    return false;
+  }
+}
+
 // Handler for all incoming messages (Rule engine -> AI engine)
-async function handleIncomingMessage(messageText, platform, senderId) {
+async function handleIncomingMessage(messageText, platform, senderId, senderName = null) {
   try {
     const config = await readMainConfig();
     const system = getSystemConfig(config);
@@ -1052,6 +1151,93 @@ async function handleIncomingMessage(messageText, platform, senderId) {
       return;
     }
 
+    // Check if customer wants to contact admin
+    if (isRequestingAdmin(messageText)) {
+      console.log(`User ${senderId} requested admin support.`);
+      await setThreadAdminReplying(senderId, true);
+      
+      try {
+        const adminId = '35910993415213363';
+        let resolvedName = senderName;
+        if (!resolvedName) {
+          if (platform === 'messenger') {
+            const accessToken = config.messenger?.accessToken;
+            if (accessToken) {
+              resolvedName = await getFacebookUserName(senderId, accessToken);
+            } else {
+              resolvedName = `Facebook User (${senderId})`;
+            }
+          } else if (platform === 'whatsapp') {
+            resolvedName = `WhatsApp SĐT: ${senderId}`;
+          } else {
+            resolvedName = `Tester (${senderId})`;
+          }
+        }
+        
+        const adminMsg = `🔔 [Yêu cầu gặp Admin]
+Khách hàng vừa yêu cầu liên hệ trực tiếp với Admin.
+- Khách hàng: ${resolvedName}
+- Nội dung tin nhắn: "${messageText}"
+- Trạng thái: Hệ thống đã tự động chuyển sang chế độ Admin tự trả lời (tắt AI).`;
+
+        await sendMessage(adminId, adminMsg, 'messenger');
+        
+        // Also send a friendly response to the customer to let them know
+        const customerResponse = `Dạ vâng ạ, em đã báo với các anh/chị tư vấn viên của Trung tâm rồi ạ. Anh/Chị vui lòng đợi một chút nhé, các bạn tư vấn sẽ liên hệ trực tiếp hỗ trợ mình ngay ạ! 😊`;
+        await sendMessage(senderId, customerResponse, platform);
+        
+      } catch (err) {
+        console.error('Failed to notify admin on human request:', err.message);
+      }
+      return;
+    }
+
+    // Check if customer is providing a phone number to register (chốt đơn)
+    const detectedPhone = extractPhoneNumber(messageText);
+    if (detectedPhone) {
+      let resolvedName = senderName;
+      if (!resolvedName) {
+        if (platform === 'messenger') {
+          const accessToken = config.messenger?.accessToken;
+          if (accessToken) {
+            resolvedName = await getFacebookUserName(senderId, accessToken);
+          } else {
+            resolvedName = `Facebook User (${senderId})`;
+          }
+        } else if (platform === 'whatsapp') {
+          resolvedName = `WhatsApp SĐT: ${senderId}`;
+        } else {
+          resolvedName = `Tester (${senderId})`;
+        }
+      }
+      
+      const newReg = await addRegistration({
+        name: resolvedName,
+        phone: detectedPhone,
+        platform,
+        customerId: senderId,
+        text: messageText
+      });
+      
+      if (newReg) {
+        try {
+          const adminId = '35910993415213363';
+          const adminMsg = `🎉 [Chốt Đơn / Đăng ký mới]
+Có khách hàng vừa để lại số điện thoại đăng ký học!
+- Họ tên: ${resolvedName}
+- Số điện thoại: ${detectedPhone}
+- Nền tảng: ${platform}
+- Tin nhắn: "${messageText}"
+- Trạng thái: Đã lưu vào danh sách thống kê.`;
+          
+          await sendMessage(adminId, adminMsg, 'messenger');
+          console.log(`Đã gửi thông báo đăng ký mới của ${resolvedName} tới admin`);
+        } catch (err) {
+          console.error('Failed to notify admin on registration:', err.message);
+        }
+      }
+    }
+
     // 3. Fallback to AI response
     try {
       const aiResponse = await generateAIResponse(messageText);
@@ -1069,6 +1255,34 @@ async function handleIncomingMessage(messageText, platform, senderId) {
       }
     } catch (aiErr) {
       console.error('AI Fallback error in webhook:', aiErr.message);
+      try {
+        const adminId = '35910993415213363';
+        let resolvedName = senderName;
+        if (!resolvedName) {
+          if (platform === 'messenger') {
+            const accessToken = config.messenger?.accessToken;
+            if (accessToken) {
+              resolvedName = await getFacebookUserName(senderId, accessToken);
+            } else {
+              resolvedName = `Facebook User (${senderId})`;
+            }
+          } else if (platform === 'whatsapp') {
+            resolvedName = `WhatsApp SĐT: ${senderId}`;
+          } else {
+            resolvedName = `Tester (${senderId})`;
+          }
+        }
+        
+        const adminMsg = `🚨 [Thông báo lỗi AI]
+Có người vừa nhắn tin tới bot nhưng không gọi được AI.
+- Người nhắn: ${resolvedName}
+- Lý do lỗi: Hết token hoặc lỗi kết nối AI (${aiErr.message || 'Unknown error'})`;
+
+        await sendMessage(adminId, adminMsg, 'messenger');
+        console.log(`Đã báo cáo lỗi AI đến admin ${adminId}`);
+      } catch (adminErr) {
+        console.error('Lỗi khi gửi thông báo lỗi AI đến admin:', adminErr.message);
+      }
     }
   } catch (err) {
     console.error('Error handling incoming message:', err);
@@ -1203,6 +1417,57 @@ app.use('/api', async (req, res, next) => {
     return next();
   } catch (err) {
     return res.status(500).json({ error: 'Auth middleware failed.' });
+  }
+});
+
+// Registrations (Leads) APIs
+app.get('/api/registrations', async (req, res) => {
+  try {
+    const data = await fs.readJson(registrationsPath).catch(() => []);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Không thể đọc danh sách đăng ký.' });
+  }
+});
+
+app.put('/api/registrations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const list = await fs.readJson(registrationsPath).catch(() => []);
+    const item = list.find(r => r.id === id);
+    if (!item) {
+      return res.status(404).json({ error: 'Không tìm thấy lượt đăng ký.' });
+    }
+    item.status = status;
+    await fs.writeJson(registrationsPath, list);
+    
+    // Notify all admin clients via socket
+    if (typeof io !== 'undefined') {
+      io.emit('registration_updated', item);
+    }
+    
+    res.json({ success: true, registration: item });
+  } catch (err) {
+    res.status(500).json({ error: 'Không thể cập nhật trạng thái đăng ký.' });
+  }
+});
+
+app.delete('/api/registrations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let list = await fs.readJson(registrationsPath).catch(() => []);
+    const filtered = list.filter(r => r.id !== id);
+    await fs.writeJson(registrationsPath, filtered);
+    
+    // Notify all admin clients via socket
+    if (typeof io !== 'undefined') {
+      io.emit('registration_deleted', id);
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Không thể xóa lượt đăng ký.' });
   }
 });
 
@@ -1926,7 +2191,14 @@ app.post('/webhook', async (req, res) => {
                 });
                 
                 // Handle message through Rule Engine and AI Engine
-                await handleIncomingMessage(messageText, 'whatsapp', senderPhone);
+                let senderName = `SĐT: ${senderPhone}`;
+                if (change.value && change.value.contacts && change.value.contacts.length > 0) {
+                  const contact = change.value.contacts.find(c => c.wa_id === senderPhone);
+                  if (contact && contact.profile && contact.profile.name) {
+                    senderName = contact.profile.name;
+                  }
+                }
+                await handleIncomingMessage(messageText, 'whatsapp', senderPhone, senderName);
               }
             });
           }

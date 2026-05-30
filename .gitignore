@@ -3,3 +3,5 @@
 data/
 *.log
 npm-debug.log*
+public/config.json
+public/cauhinh_ai.json
