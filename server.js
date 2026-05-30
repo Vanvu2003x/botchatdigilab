@@ -176,6 +176,197 @@ const initDB = async () => {
 };
 initDB();
 
+// =============================================
+// CONVERSATION MEMORY SYSTEM (RAM Cache + File)
+// =============================================
+const conversationsDir = path.join(__dirname, 'data', 'conversations');
+fs.ensureDirSync(conversationsDir);
+
+// RAM Cache: Map<senderId, { messages: [{role, content, timestamp}], summary: string, timer: NodeJS.Timeout }>
+const conversationCache = new Map();
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 phút
+const MAX_HISTORY_TO_AI = 20; // Gửi tối đa 20 tin nhắn gần nhất cho AI
+const MAX_MESSAGES_BEFORE_SUMMARY = 40; // Khi file vượt 40 tin thì tóm tắt phần cũ
+
+// Đường dẫn file lịch sử của 1 sender
+function getConversationFilePath(senderId) {
+  const safeId = String(senderId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(conversationsDir, `${safeId}.json`);
+}
+
+// Đọc lịch sử từ file
+async function loadConversationFromFile(senderId) {
+  const filePath = getConversationFilePath(senderId);
+  try {
+    if (await fs.pathExists(filePath)) {
+      const data = await fs.readJson(filePath);
+      return {
+        messages: Array.isArray(data.messages) ? data.messages : [],
+        summary: data.summary || ''
+      };
+    }
+  } catch (err) {
+    console.error(`Error loading conversation file for ${senderId}:`, err.message);
+  }
+  return { messages: [], summary: '' };
+}
+
+// Ghi lịch sử xuống file
+async function saveConversationToFile(senderId, messages, summary) {
+  const filePath = getConversationFilePath(senderId);
+  try {
+    await fs.writeJson(filePath, {
+      senderId,
+      summary: summary || '',
+      messages,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error(`Error saving conversation file for ${senderId}:`, err.message);
+  }
+}
+
+// Flush cache xuống file khi hết TTL 30p
+function flushCacheToFile(senderId) {
+  const cached = conversationCache.get(senderId);
+  if (!cached) return;
+  console.log(`[ConvMemory] Flushing cache to file for ${senderId} (TTL expired)`);
+  saveConversationToFile(senderId, cached.messages, cached.summary)
+    .then(() => {
+      conversationCache.delete(senderId);
+      console.log(`[ConvMemory] Cache cleared for ${senderId}`);
+    })
+    .catch(err => {
+      console.error(`[ConvMemory] Error flushing cache for ${senderId}:`, err.message);
+    });
+}
+
+// Reset timer TTL 30p cho 1 sender
+function resetCacheTTL(senderId) {
+  const cached = conversationCache.get(senderId);
+  if (cached && cached.timer) {
+    clearTimeout(cached.timer);
+  }
+  if (cached) {
+    cached.timer = setTimeout(() => flushCacheToFile(senderId), CACHE_TTL_MS);
+  }
+}
+
+// Lấy lịch sử hội thoại (cache-first, fallback file)
+async function getConversationHistory(senderId) {
+  // 1. Kiểm tra cache RAM trước
+  if (conversationCache.has(senderId)) {
+    console.log(`[ConvMemory] Cache HIT for ${senderId}`);
+    resetCacheTTL(senderId);
+    return conversationCache.get(senderId);
+  }
+
+  // 2. Cache MISS → đọc từ file
+  console.log(`[ConvMemory] Cache MISS for ${senderId}, loading from file...`);
+  const fileData = await loadConversationFromFile(senderId);
+
+  // 3. Nạp vào cache RAM
+  const cacheEntry = {
+    messages: fileData.messages,
+    summary: fileData.summary,
+    timer: setTimeout(() => flushCacheToFile(senderId), CACHE_TTL_MS)
+  };
+  conversationCache.set(senderId, cacheEntry);
+  return cacheEntry;
+}
+
+// Thêm tin nhắn vào lịch sử
+async function addMessageToHistory(senderId, role, content) {
+  const history = await getConversationHistory(senderId);
+  history.messages.push({
+    role,
+    content,
+    timestamp: new Date().toISOString()
+  });
+
+  // Nếu lịch sử quá dài, tạo tóm tắt phần cũ
+  if (history.messages.length > MAX_MESSAGES_BEFORE_SUMMARY) {
+    const oldMessages = history.messages.slice(0, history.messages.length - MAX_HISTORY_TO_AI);
+    const oldText = oldMessages.map(m => `${m.role === 'user' ? 'Khách' : 'Bot'}: ${m.content}`).join('\n');
+    
+    // Tóm tắt đơn giản bằng cách trích xuất thông tin quan trọng
+    const summary = buildConversationSummary(oldText, history.summary);
+    history.summary = summary;
+    // Chỉ giữ lại tin nhắn gần nhất
+    history.messages = history.messages.slice(-MAX_HISTORY_TO_AI);
+  }
+
+  resetCacheTTL(senderId);
+}
+
+// Tạo tóm tắt từ lịch sử cũ (trích xuất thông tin quan trọng)
+function buildConversationSummary(oldText, existingSummary) {
+  const lines = oldText.split('\n').filter(l => l.trim());
+  const keyInfo = [];
+
+  // Tìm số điện thoại
+  const phones = oldText.match(/(\b0[0-9]{9,10}\b)/g);
+  if (phones) keyInfo.push(`SĐT: ${[...new Set(phones)].join(', ')}`);
+
+  // Tìm tên (sau các pattern phổ biến)
+  const namePatterns = oldText.match(/(?:tên|name|tôi là|mình là|em là|anh là|chị là)\s*[:.]?\s*([^\n,.!?]{2,30})/gi);
+  if (namePatterns) {
+    const names = namePatterns.map(n => n.replace(/^.*(?:tên|name|tôi là|mình là|em là|anh là|chị là)\s*[:.]?\s*/i, '').trim());
+    if (names.length > 0) keyInfo.push(`Tên: ${[...new Set(names)].join(', ')}`);
+  }
+
+  // Tìm từ khóa quan tâm
+  const interests = [];
+  if (/robot|robotics/i.test(oldText)) interests.push('Robotics');
+  if (/stem/i.test(oldText)) interests.push('STEM');
+  if (/lập trình|coding|code/i.test(oldText)) interests.push('Lập trình');
+  if (/scratch/i.test(oldText)) interests.push('Scratch');
+  if (/python/i.test(oldText)) interests.push('Python');
+  if (interests.length > 0) keyInfo.push(`Quan tâm: ${interests.join(', ')}`);
+
+  // Trạng thái chốt đơn
+  if (/đăng ký|đăng kí|chốt|register/i.test(oldText)) keyInfo.push('Trạng thái: Đã quan tâm đăng ký');
+  if (/học phí|giá|bao nhiêu|price/i.test(oldText)) keyInfo.push('Đã hỏi về học phí');
+
+  // Giữ lại 5 dòng cuối của lịch sử cũ để không mất ngữ cảnh
+  const recentOld = lines.slice(-5).join('\n');
+
+  const summaryParts = [];
+  if (existingSummary) summaryParts.push(existingSummary);
+  if (keyInfo.length > 0) summaryParts.push(`[Thông tin khách hàng]\n${keyInfo.join('\n')}`);
+  if (recentOld) summaryParts.push(`[Đoạn hội thoại trước]\n${recentOld}`);
+
+  return summaryParts.join('\n\n');
+}
+
+// Chuẩn bị lịch sử để gửi cho AI (chuyển sang format messages)
+function prepareHistoryForAI(history) {
+  const result = [];
+
+  // Nếu có tóm tắt, đưa vào đầu tiên
+  if (history.summary) {
+    result.push({
+      role: 'user',
+      content: `[Tóm tắt cuộc trò chuyện trước đó với khách hàng này]:\n${history.summary}`
+    });
+    result.push({
+      role: 'assistant',
+      content: 'Tôi đã ghi nhận thông tin từ các cuộc trò chuyện trước. Tôi sẽ tiếp tục hỗ trợ khách hàng dựa trên ngữ cảnh này.'
+    });
+  }
+
+  // Thêm các tin nhắn gần nhất (tối đa MAX_HISTORY_TO_AI)
+  const recentMessages = history.messages.slice(-MAX_HISTORY_TO_AI);
+  for (const msg of recentMessages) {
+    result.push({
+      role: msg.role,
+      content: msg.content
+    });
+  }
+
+  return result;
+}
+
 io.use((socket, next) => {
   const cookies = parseCookies(socket.request.headers.cookie || '');
   const token = cookies[SESSION_COOKIE_NAME] || '';
@@ -645,19 +836,31 @@ function resolveGeminiTextModel(model) {
   return model;
 }
 
-async function generateGeminiText({ apiKey, model, userMessage, systemPrompt, timeoutMs = 30000 }) {
+async function generateGeminiText({ apiKey, model, userMessage, systemPrompt, conversationHistory, timeoutMs = 30000 }) {
   const textModel = resolveGeminiTextModel(model);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${textModel}:generateContent?key=${apiKey}`;
-  const payload = {
-    system_instruction: {
-      parts: [{ text: systemPrompt || '' }]
-    },
-    contents: [
+  
+  // Xây dựng contents: nếu có lịch sử hội thoại thì dùng multi-turn
+  let contents;
+  if (conversationHistory && conversationHistory.length > 0) {
+    contents = conversationHistory.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }));
+  } else {
+    contents = [
       {
         role: 'user',
         parts: [{ text: userMessage }]
       }
-    ],
+    ];
+  }
+
+  const payload = {
+    system_instruction: {
+      parts: [{ text: systemPrompt || '' }]
+    },
+    contents,
     generationConfig: {
       temperature: 0.2,
       topP: 0.9
@@ -880,8 +1083,7 @@ async function retrieveContext(queryText, config) {
 }
 
 // Multi-provider AI Chat Completion Logic
-// Multi-provider AI Chat Completion Logic
-async function generateAIResponse(userMessage) {
+async function generateAIResponse(userMessage, senderId) {
   try {
     const config = await fs.readJson(configPath);
     const system = getSystemConfig(config);
@@ -900,6 +1102,13 @@ async function generateAIResponse(userMessage) {
       ? `${systemPrompt}\n\nSử dụng các thông tin chính thức sau để trả lời khách hàng (Nếu thông tin không đề cập, hãy khéo léo từ chối hoặc hướng dẫn để lại thông tin để nhân viên liên hệ sau, không tự bịa thông tin):\n\n[TÀI LIỆU CỬA HÀNG]:\n${context}`
       : systemPrompt;
 
+    // Lấy lịch sử hội thoại và chuẩn bị cho AI
+    let conversationMessages = null;
+    if (senderId) {
+      const history = await getConversationHistory(senderId);
+      conversationMessages = prepareHistoryForAI(history);
+    }
+
     let replyText = null;
     let attempts = 0;
     const maxAttempts = Math.max(apiKeys.length * 2, 2);
@@ -914,6 +1123,7 @@ async function generateAIResponse(userMessage) {
             model,
             userMessage,
             systemPrompt: finalSystemPrompt,
+            conversationHistory: conversationMessages,
             timeoutMs: 30000
           });
         } else {
@@ -929,12 +1139,17 @@ async function generateAIResponse(userMessage) {
             endpoint = `${cleanBaseUrl}/chat/completions`;
           }
 
+          // Xây dựng messages với lịch sử hội thoại
+          const messages = [{ role: 'system', content: finalSystemPrompt }];
+          if (conversationMessages && conversationMessages.length > 0) {
+            messages.push(...conversationMessages);
+          } else {
+            messages.push({ role: 'user', content: userMessage });
+          }
+
           const payload = {
             model: model,
-            messages: [
-              { role: 'system', content: finalSystemPrompt },
-              { role: 'user', content: userMessage }
-            ]
+            messages
           };
 
           const response = await axios.post(endpoint, payload, {
@@ -1240,8 +1455,14 @@ Có khách hàng vừa để lại số điện thoại đăng ký học!
 
     // 3. Fallback to AI response
     try {
-      const aiResponse = await generateAIResponse(messageText);
+      // Lưu tin nhắn của khách vào lịch sử hội thoại
+      await addMessageToHistory(senderId, 'user', messageText);
+
+      const aiResponse = await generateAIResponse(messageText, senderId);
       if (aiResponse) {
+        // Lưu phản hồi AI vào lịch sử hội thoại
+        await addMessageToHistory(senderId, 'assistant', aiResponse);
+
         await logActivity({
           direction: 'system',
           platform,
@@ -1684,8 +1905,14 @@ app.post('/api/test-chat', async (req, res) => {
         status: 'info'
       });
     } else {
-      aiResponse = await generateAIResponse(message);
+      // Lưu tin nhắn tester vào lịch sử
+      await addMessageToHistory('tester', 'user', message);
+
+      aiResponse = await generateAIResponse(message, 'tester');
       if (aiResponse) {
+        // Lưu phản hồi AI vào lịch sử
+        await addMessageToHistory('tester', 'assistant', aiResponse);
+
         await logActivity({
           direction: 'outgoing',
           platform: 'test',
