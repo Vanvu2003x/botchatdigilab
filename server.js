@@ -367,6 +367,163 @@ function prepareHistoryForAI(history) {
   return result;
 }
 
+// =============================================
+// MESSAGE DEBOUNCING / GROUPING SYSTEM
+// =============================================
+const webhookBuffers = new Map();
+const DEBOUNCE_DELAY_MS = 5000; // Đợi 5 giây sau tin nhắn cuối cùng để gom tin
+
+function queueIncomingMessage(messageText, platform, senderId, senderName = null) {
+  let buffer = webhookBuffers.get(senderId);
+  
+  if (buffer) {
+    // Thêm tin nhắn mới vào mảng
+    buffer.messages.push(messageText);
+    if (senderName) buffer.senderName = senderName;
+    buffer.platform = platform; // Cập nhật platform nếu có thay đổi
+    
+    // Clear timer cũ
+    clearTimeout(buffer.timer);
+    console.log(`[Debounce] Nhận thêm tin nhắn từ ${senderId}, gia hạn thêm 5 giây.`);
+  } else {
+    buffer = {
+      messages: [messageText],
+      platform,
+      senderName,
+      timer: null
+    };
+    console.log(`[Debounce] Bắt đầu gom tin nhắn cho ${senderId}, chờ 5 giây.`);
+  }
+  
+  // Thiết lập timer mới
+  buffer.timer = setTimeout(async () => {
+    try {
+      const activeBuffer = webhookBuffers.get(senderId);
+      if (!activeBuffer) return;
+      
+      // Xóa khỏi Map trước để tránh race condition
+      webhookBuffers.delete(senderId);
+      
+      // Ghép các dòng tin nhắn lại bằng ký tự xuống dòng
+      const combinedText = activeBuffer.messages.join('\n');
+      console.log(`[Debounce] Đã gom ${activeBuffer.messages.length} tin nhắn từ ${senderId}. Tiến hành xử lý.`);
+      
+      await handleIncomingMessage(combinedText, activeBuffer.platform, senderId, activeBuffer.senderName);
+    } catch (err) {
+      console.error(`[Debounce] Lỗi khi xử lý tin nhắn đã gom của ${senderId}:`, err);
+    }
+  }, DEBOUNCE_DELAY_MS);
+  
+  webhookBuffers.set(senderId, buffer);
+}
+
+// AI Classification logic to categorize customer intent
+async function classifyThreadStatus(customerId, platform) {
+  try {
+    const config = await readMainConfig();
+    if (!config.ai || !config.ai.apiKey) return;
+    
+    // Đọc lịch sử hội thoại
+    const history = await getConversationHistory(customerId);
+    if (!history || !history.messages || history.messages.length === 0) return;
+    
+    // Tối đa lấy 15 tin nhắn gần nhất để phân loại nhanh
+    const recentMessages = history.messages.slice(-15);
+    const conversationText = recentMessages.map(m => `${m.role === 'user' ? 'Khách' : 'Bot'}: ${m.content}`).join('\n');
+    
+    const classificationPrompt = `Dựa vào lịch sử cuộc hội thoại sau giữa Khách hàng và Bot tư vấn của Trung tâm đào tạo lập trình STEM & Robotics (Digi-Lab), hãy phân loại trạng thái hiện tại của Khách hàng.
+
+[HỘI THOẠI]:
+${conversationText}
+
+Hãy chọn và CHỈ trả về một trong các nhãn chính xác sau:
+- "Chờ tư vấn": Mới nhắn tin, chào hỏi, chưa đi vào chi tiết khóa học.
+- "Đang tư vấn": Đang tích cực hỏi về thông tin khóa học, học phí, địa chỉ, lịch học...
+- "Phân vân": Khách hàng tỏ ra chần chừ, lưỡng lự, chê học phí đắt, cần hỏi lại gia đình, so sánh với trung tâm khác, hoặc im lặng khi được tư vấn sâu.
+- "Đã chốt đơn": Khách hàng đã để lại Số điện thoại, đồng ý đăng ký học thử hoặc đồng ý đăng ký chính thức.
+- "Từ chối": Khách hàng từ chối học rõ ràng, báo bận, không có nhu cầu nữa, hoặc tỏ thái độ không quan tâm.
+
+Lưu ý: CHỈ trả về đúng nhãn bạn chọn (ví dụ: "Phân vân" hoặc "Đã chốt đơn"). Không viết thêm bất kỳ từ ngữ nào khác.`;
+
+    const { provider, model, baseUrl, apiKey } = config.ai;
+    const apiKeys = apiKey.split(',').map(k => k.trim()).filter(Boolean);
+    if (apiKeys.length === 0) return;
+    
+    let aiStatus = null;
+    const activeKey = getActiveApiKey(apiKeys);
+    
+    if (provider === 'gemini') {
+      aiStatus = await generateGeminiText({
+        apiKey: activeKey,
+        model,
+        userMessage: classificationPrompt,
+        systemPrompt: "Bạn là một AI phân tích hành vi khách hàng chuyên nghiệp.",
+        timeoutMs: 15000
+      });
+    } else {
+      let endpoint = '';
+      if (provider === 'openai') {
+        endpoint = 'https://api.openai.com/v1/chat/completions';
+      } else if (provider === 'deepseek') {
+        endpoint = 'https://api.deepseek.com/v1/chat/completions';
+      } else if (provider === 'custom') {
+        if (!baseUrl) return;
+        const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        endpoint = `${cleanBaseUrl}/chat/completions`;
+      }
+      
+      const payload = {
+        model,
+        messages: [
+          { role: 'system', content: "Bạn là một AI phân tích hành vi khách hàng chuyên nghiệp." },
+          { role: 'user', content: classificationPrompt }
+        ],
+        temperature: 0.1
+      };
+      
+      const response = await axios.post(endpoint, payload, {
+        headers: {
+          'Authorization': `Bearer ${activeKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+      
+      if (response.data?.choices?.[0]?.message?.content) {
+        aiStatus = response.data.choices[0].message.content.trim();
+      }
+    }
+    
+    if (aiStatus) {
+      // Dọn dẹp nhãn trả về (bỏ ngoặc kép, dấu chấm nếu có)
+      aiStatus = aiStatus.replace(/['"“”.]/g, '').trim();
+      const validStatuses = ['Chờ tư vấn', 'Đang tư vấn', 'Phân vân', 'Đã chốt đơn', 'Từ chối'];
+      
+      // Nếu không khớp chính xác, thử tìm xem nhãn nào nằm trong chuỗi trả về
+      let matchedStatus = validStatuses.find(s => aiStatus.toLowerCase().includes(s.toLowerCase()));
+      
+      if (matchedStatus) {
+        // Cập nhật vào active_threads.json
+        const threadsFile = path.join(__dirname, 'data', 'active_threads.json');
+        const threads = await fs.readJson(threadsFile).catch(() => []);
+        let thread = threads.find(t => t.id === customerId);
+        if (thread) {
+          thread.aiStatus = matchedStatus;
+          await fs.writeJson(threadsFile, threads);
+          console.log(`[AI Classification] Classified customer ${customerId} as: ${matchedStatus}`);
+          
+          // Emit socket để frontend cập nhật realtime
+          if (typeof io !== 'undefined') {
+            io.emit('thread_status_updated', { id: customerId, aiStatus: matchedStatus });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[AI Classification] Error classifying thread status:', err.message);
+  }
+}
+
 io.use((socket, next) => {
   const cookies = parseCookies(socket.request.headers.cookie || '');
   const token = cookies[SESSION_COOKIE_NAME] || '';
@@ -1473,6 +1630,9 @@ Có khách hàng vừa để lại số điện thoại đăng ký học!
           status: 'info'
         });
         await sendMessage(senderId, aiResponse, platform);
+        
+        // Chạy phân loại trạng thái khách hàng bằng AI trong nền (không làm chậm phản hồi)
+        classifyThreadStatus(senderId, platform).catch(err => console.error('[AI Classification Error]:', err));
       }
     } catch (aiErr) {
       console.error('AI Fallback error in webhook:', aiErr.message);
@@ -1922,6 +2082,9 @@ app.post('/api/test-chat', async (req, res) => {
           text: aiResponse,
           status: 'success'
         });
+        
+        // Chạy phân loại trạng thái khách hàng bằng AI trong nền
+        classifyThreadStatus('tester', 'test').catch(err => console.error('[AI Classification Error]:', err));
       }
     }
     
@@ -2297,6 +2460,13 @@ app.post('/api/send-message', async (req, res) => {
     }
 
     const data = await sendMessage(recipient, text, platform, { autoLearn: allowAutoLearn });
+    
+    // Lưu tin nhắn phản hồi của Admin vào lịch sử hội thoại
+    await addMessageToHistory(recipient, 'assistant', text);
+    
+    // Chạy phân loại trạng thái khách hàng bằng AI trong nền sau khi Admin trả lời
+    classifyThreadStatus(recipient, platform).catch(err => console.error('[AI Classification Error]:', err));
+
     res.json({ success: true, message: 'Message sent successfully.', data });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2382,8 +2552,8 @@ app.post('/webhook', async (req, res) => {
               details: JSON.stringify(webhookEvent)
             });
             
-            // Handle message through Rule Engine and AI Engine
-            await handleIncomingMessage(messageText, 'messenger', senderId);
+            // Handle message through Rule Engine and AI Engine with debouncing (5s delay)
+            queueIncomingMessage(messageText, 'messenger', senderId);
           }
         });
       });
@@ -2425,7 +2595,8 @@ app.post('/webhook', async (req, res) => {
                     senderName = contact.profile.name;
                   }
                 }
-                await handleIncomingMessage(messageText, 'whatsapp', senderPhone, senderName);
+                // Handle message through Rule Engine and AI Engine with debouncing (5s delay)
+                queueIncomingMessage(messageText, 'whatsapp', senderPhone, senderName);
               }
             });
           }

@@ -1023,6 +1023,18 @@ function renderThreadsList() {
     let platformBadge = `<span class="badge-platform ${thread.platform}">${thread.platform}</span>`;
     let adminModeBadge = thread.adminReplying ? `<span class="badge-admin-mode">Admin</span>` : '';
     
+    let aiStatusBadge = '';
+    if (thread.aiStatus) {
+      let bgColor = 'rgba(255,255,255,0.1)';
+      let color = '#fff';
+      if (thread.aiStatus === 'Phân vân') { bgColor = 'rgba(251, 191, 36, 0.15)'; color = 'rgb(251, 191, 36)'; }
+      else if (thread.aiStatus === 'Đã chốt đơn') { bgColor = 'rgba(16, 185, 129, 0.15)'; color = 'rgb(52, 211, 153)'; }
+      else if (thread.aiStatus === 'Từ chối') { bgColor = 'rgba(239, 68, 68, 0.15)'; color = 'rgb(248, 113, 113)'; }
+      else if (thread.aiStatus === 'Đang tư vấn') { bgColor = 'rgba(59, 130, 246, 0.15)'; color = 'rgb(96, 165, 250)'; }
+      else if (thread.aiStatus === 'Chờ tư vấn') { bgColor = 'rgba(156, 163, 175, 0.15)'; color = 'rgb(209, 213, 219)'; }
+      aiStatusBadge = `<span style="font-size: 9px; padding: 1px 5px; border-radius: 4px; font-weight: 700; background-color: ${bgColor}; color: ${color}; border: 1px solid ${color.replace('rgb', 'rgba').replace(')', ', 0.35)')};">${thread.aiStatus}</span>`;
+    }
+    
     let previewText = thread.lastMessage || '...';
     if (previewText.length > 25) {
       previewText = previewText.slice(0, 22) + '...';
@@ -1034,9 +1046,10 @@ function renderThreadsList() {
         <span class="thread-time">${timeStr}</span>
       </div>
       <div class="thread-preview">${escapeHtml(previewText)}</div>
-      <div class="thread-badges" style="display: flex; gap: 5px; margin-top: 5px;">
+      <div class="thread-badges" style="display: flex; gap: 5px; margin-top: 5px; align-items: center;">
         ${platformBadge}
         ${adminModeBadge}
+        ${aiStatusBadge}
       </div>
     `;
     container.appendChild(item);
@@ -1310,8 +1323,19 @@ function initSocketIO() {
   socket.on('thread_status_updated', (data) => {
     const thread = allThreads.find(t => t.id === data.id);
     if (thread) {
-      thread.adminReplying = data.adminReplying;
+      if (typeof data.adminReplying !== 'undefined') {
+        thread.adminReplying = data.adminReplying;
+      }
+      if (typeof data.aiStatus !== 'undefined') {
+        thread.aiStatus = data.aiStatus;
+      }
       renderThreadsList();
+      
+      // Cập nhật biểu đồ thống kê nếu tab thống kê đang hoạt động
+      const regTabActive = document.getElementById('tab-registrations').classList.contains('active');
+      if (regTabActive) {
+        updateFunnelAnalytics();
+      }
       
       if (activeThreadId === data.id) {
         document.getElementById('chk-admin-replying').checked = data.adminReplying;
@@ -1598,12 +1622,12 @@ function calculateCustomerAnalytics() {
   let closedCount = 0;
   let consultingCount = 0;
   let rejectedCount = 0;
-  let inquiringCount = 0;
   let newCount = 0;
   
   list.forEach(t => {
     const reg = regs.find(r => r.customerId === t.id);
     if (reg) {
+      // Ưu tiên trạng thái thủ công do admin chọn trong danh sách đăng ký
       if (reg.status === 'Đã chốt đơn') {
         closedCount++;
       } else if (reg.status === 'Từ chối') {
@@ -1611,7 +1635,19 @@ function calculateCustomerAnalytics() {
       } else {
         consultingCount++;
       }
+    } else if (t.aiStatus) {
+      // Nếu chưa có đăng ký thủ công nhưng AI đã tự động phân loại hội thoại
+      if (t.aiStatus === 'Đã chốt đơn') {
+        closedCount++;
+      } else if (t.aiStatus === 'Từ chối') {
+        rejectedCount++;
+      } else if (t.aiStatus === 'Phân vân' || t.aiStatus === 'Đang tư vấn') {
+        consultingCount++;
+      } else {
+        newCount++;
+      }
     } else {
+      // Fallback nếu chưa phân loại và chưa có số điện thoại
       const userLogsCount = allLogs.filter(l => 
         l.type === 'message' && 
         (l.sender === t.id || l.recipient === t.id)
@@ -1620,7 +1656,7 @@ function calculateCustomerAnalytics() {
       if (userLogsCount <= 2) {
         newCount++;
       } else {
-        inquiringCount++;
+        consultingCount++;
       }
     }
   });
@@ -1628,7 +1664,7 @@ function calculateCustomerAnalytics() {
   return {
     totalCustomers: list.length,
     closed: closedCount,
-    consulting: consultingCount + inquiringCount,
+    consulting: consultingCount,
     rejected: rejectedCount,
     newLeads: newCount
   };
