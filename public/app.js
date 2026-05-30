@@ -889,6 +889,41 @@ async function handleSaveDocument(e) {
   }
 }
 
+async function retrainAllKnowledge() {
+  if (!confirm('Bạn có chắc chắn muốn huấn luyện lại TOÀN BỘ tài liệu tri thức từ đầu không?\nTác vụ này sẽ phân đoạn lại tất cả văn bản và cập nhật lại vector embeddings mới.')) {
+    return;
+  }
+  
+  const statusEl = document.getElementById('knowledge-status');
+  const btn = document.querySelector('[onclick="retrainAllKnowledge()"]');
+  const originalHtml = btn.innerHTML;
+  
+  btn.disabled = true;
+  btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Đang huấn luyện...`;
+  statusEl.innerHTML = `<span style="color: var(--primary-light);"><i class="fa-solid fa-hourglass-half fa-spin"></i> Đang huấn luyện lại toàn bộ...</span>`;
+  
+  try {
+    const res = await fetch('/api/knowledge/retrain-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const result = await res.json();
+    if (res.ok) {
+      showToast(result.message || 'Huấn luyện lại toàn bộ tài liệu thành công!', 'success');
+      await loadKnowledge();
+    } else {
+      showToast(`Lỗi: ${result.error || 'Huấn luyện thất bại'}`, 'error');
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối tới server để huấn luyện.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+    statusEl.textContent = 'Trạng thái: Sẵn sàng';
+  }
+}
+
 async function deleteDocument(docId) {
   event.stopPropagation(); // Stop click from selecting document
   

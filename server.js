@@ -1928,6 +1928,87 @@ app.get('/api/knowledge', async (req, res) => {
   }
 });
 
+app.post('/api/knowledge/retrain-all', async (req, res) => {
+  try {
+    const config = await fs.readJson(configPath);
+    const knowledgeData = await fs.readJson(knowledgePath);
+    
+    if (!knowledgeData.documents || knowledgeData.documents.length === 0) {
+      return res.status(400).json({ error: 'Không có tài liệu nào để huấn luyện.' });
+    }
+    
+    const nowStr = new Date().toISOString();
+    const isOffline = !!(config.ai && config.ai.useOfflineRag);
+    
+    await logActivity({
+      direction: 'system',
+      platform: 'system',
+      type: 'system',
+      sender: 'RAG Engine',
+      recipient: 'Database',
+      text: `Bắt đầu huấn luyện lại TOÀN BỘ tài liệu (${knowledgeData.documents.length} tài liệu) - ${isOffline ? 'RAG Cục bộ (Offline)' : 'RAG Vector API'}...`,
+      status: 'info'
+    });
+
+    const newAllEmbeddings = [];
+    let totalChunks = 0;
+    let successEmbeddings = 0;
+
+    for (const doc of knowledgeData.documents) {
+      const chunks = chunkText(doc.content);
+      doc.lastTrained = nowStr;
+      
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        let embedding = null;
+        totalChunks++;
+        
+        if (config.ai && config.ai.apiKey && (config.ai.provider === 'gemini' || config.ai.provider === 'openai' || config.ai.provider === 'custom') && !isOffline) {
+          try {
+            embedding = await getAPIEmbedding(chunk, config);
+            if (embedding) successEmbeddings++;
+          } catch (embErr) {
+            console.warn(`Failed to generate embedding for chunk ${i} of document ${doc.id}:`, embErr.message);
+          }
+        }
+        
+        newAllEmbeddings.push({
+          id: `chunk_${doc.id}_${i}_${Date.now()}`,
+          documentId: doc.id,
+          text: chunk,
+          embedding
+        });
+      }
+    }
+    
+    // Ghi đè toàn bộ embeddings
+    await fs.writeJson(knowledgeEmbeddingsPath, newAllEmbeddings);
+    
+    // Lưu thông tin tài liệu đã cập nhật ngày huấn luyện
+    knowledgeData.lastTrainedAll = nowStr;
+    await fs.writeJson(knowledgePath, knowledgeData);
+    
+    await logActivity({
+      direction: 'system',
+      platform: 'system',
+      type: 'system',
+      sender: 'RAG Engine',
+      recipient: 'Database',
+      text: `Huấn luyện lại toàn bộ hoàn tất. Tổng số đoạn: ${totalChunks}, Số vector API: ${successEmbeddings}`,
+      status: 'success'
+    });
+    
+    res.json({
+      success: true,
+      message: `Huấn luyện lại toàn bộ thành công. Tổng số tài liệu: ${knowledgeData.documents.length}, Tổng số đoạn: ${totalChunks}, Số vector API: ${successEmbeddings}`,
+      lastTrainedAll: nowStr
+    });
+  } catch (err) {
+    console.error('Retrain all error:', err);
+    res.status(500).json({ error: 'Lỗi khi huấn luyện lại toàn bộ tài liệu tri thức.' });
+  }
+});
+
 app.post('/api/knowledge', async (req, res) => {
   const { id, title, content } = req.body;
   if (!title || !content) {

@@ -555,9 +555,14 @@
             <div class="glass-panel" style="display: flex; flex-direction: column; height: 500px; padding: 20px;">
               <div class="panel-header flex-row justify-between align-center" style="margin-bottom: 15px; flex-shrink: 0;">
                 <h3 style="font-size: 15px; margin-bottom: 0;"><i class="fa-solid fa-folder-open text-gradient"></i> Danh sách tài liệu</h3>
-                <button class="btn btn-sm btn-primary" onclick="resetDocumentForm()" title="Thêm tài liệu mới" style="padding: 6px 12px;">
-                  <i class="fa-solid fa-plus"></i> Thêm
-                </button>
+                <div class="flex-row gap-5">
+                  <button class="btn btn-sm btn-secondary" onclick="retrainAllKnowledge()" title="Huấn luyện lại tất cả tài liệu" style="padding: 6px 12px; background-color: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: #fff; display: inline-flex; align-items: center; gap: 5px;">
+                    <i class="fa-solid fa-arrows-rotate"></i> Huấn luyện lại tất cả
+                  </button>
+                  <button class="btn btn-sm btn-primary" onclick="resetDocumentForm()" title="Thêm tài liệu mới" style="padding: 6px 12px; display: inline-flex; align-items: center; gap: 5px;">
+                    <i class="fa-solid fa-plus"></i> Thêm
+                  </button>
+                </div>
               </div>
               <div id="knowledge-documents-list" style="overflow-y: auto; flex-grow: 1; display: flex; flex-direction: column; gap: 10px; padding-right: 5px;">
                 <!-- Documents list loaded here dynamically -->
