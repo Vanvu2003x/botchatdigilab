@@ -6,7 +6,6 @@ const path = require('path');
 const axios = require('axios');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const { GoogleGenAI, Modality } = require('@google/genai');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
@@ -618,118 +617,52 @@ async function sleep(ms) {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function resolveGeminiLiveModel(model) {
+function resolveGeminiTextModel(model) {
   const normalized = (model || '').trim().toLowerCase();
+  if (!normalized) return 'gemini-2.5-flash';
+
+  // Live/audio models are unstable for pure text chatbot use-cases.
+  // Force them back to a regular text model.
   if (normalized.includes('live') || normalized.includes('native-audio')) {
-    return model;
+    return 'gemini-2.5-flash';
   }
-  if (normalized.includes('2.5')) {
-    return 'gemini-2.5-flash-native-audio-preview-12-2025';
-  }
-  return 'gemini-3.1-flash-live-preview';
+  return model;
 }
 
-async function generateGeminiLiveText({ apiKey, model, userMessage, systemPrompt, timeoutMs = 30000 }) {
-  const ai = new GoogleGenAI({ apiKey });
-  const liveModel = resolveGeminiLiveModel(model);
-
-  return new Promise((resolve, reject) => {
-    const responseQueue = [];
-    let session = null;
-    let finished = false;
-    let transcript = '';
-    let fallbackText = '';
-    let queuePoll = null;
-
-    const cleanup = () => {
-      if (queuePoll) {
-        clearInterval(queuePoll);
-        queuePoll = null;
+async function generateGeminiText({ apiKey, model, userMessage, systemPrompt, timeoutMs = 30000 }) {
+  const textModel = resolveGeminiTextModel(model);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${textModel}:generateContent?key=${apiKey}`;
+  const payload = {
+    system_instruction: {
+      parts: [{ text: systemPrompt || '' }]
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: userMessage }]
       }
-      if (session) {
-        try {
-          session.close();
-        } catch (_) {
-          // ignore close errors
-        }
-      }
-    };
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      topP: 0.9
+    }
+  };
 
-    const finish = (err, result) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      if (err) return reject(err);
-      resolve(result);
-    };
-
-    const timeoutTimer = setTimeout(() => {
-      finish(new Error(`Gemini Live timeout after ${timeoutMs}ms.`));
-    }, timeoutMs);
-
-    const closeAndResolve = () => {
-      clearTimeout(timeoutTimer);
-      const finalText = (transcript || fallbackText || '').trim();
-      if (!finalText) {
-        return finish(new Error('Gemini Live returned empty transcription/text.'));
-      }
-      finish(null, finalText);
-    };
-
-    ai.live.connect({
-      model: liveModel,
-      config: {
-        responseModalities: [Modality.AUDIO],
-        outputAudioTranscription: {},
-        systemInstruction: {
-          parts: [{ text: systemPrompt || '' }]
-        }
-      },
-      callbacks: {
-        onopen: () => {},
-        onmessage: (message) => {
-          responseQueue.push(message);
-        },
-        onerror: (e) => {
-          clearTimeout(timeoutTimer);
-          const msg = e && e.message ? e.message : 'Unknown Live API error';
-          finish(new Error(`Gemini Live onerror: ${msg}`));
-        },
-        onclose: (e) => {
-          if (!finished) {
-            const reason = e && e.reason ? e.reason : 'Live API socket closed before completion';
-            clearTimeout(timeoutTimer);
-            finish(new Error(reason));
-          }
-        }
-      }
-    }).then((liveSession) => {
-      session = liveSession;
-      session.sendClientContent({ turns: userMessage, turnComplete: true });
-
-      queuePoll = setInterval(() => {
-        while (responseQueue.length > 0) {
-          const msg = responseQueue.shift();
-          if (msg && msg.text) {
-            fallbackText += msg.text;
-          }
-          const textChunk = msg && msg.serverContent && msg.serverContent.outputTranscription
-            ? msg.serverContent.outputTranscription.text
-            : '';
-          if (textChunk) {
-            transcript += textChunk;
-          }
-          if (msg && msg.serverContent && msg.serverContent.turnComplete) {
-            closeAndResolve();
-            return;
-          }
-        }
-      }, 40);
-    }).catch((err) => {
-      clearTimeout(timeoutTimer);
-      finish(err);
-    });
+  const response = await axios.post(url, payload, {
+    timeout: timeoutMs,
+    headers: { 'Content-Type': 'application/json' }
   });
+
+  const text = response.data?.candidates?.[0]?.content?.parts
+    ?.filter(p => typeof p.text === 'string')
+    ?.map(p => p.text)
+    ?.join('\n')
+    ?.trim();
+
+  if (!text) {
+    throw new Error('Gemini generateContent returned empty text.');
+  }
+  return text;
 }
 
 // API Embedding generator (Gemini or OpenAI)
@@ -960,7 +893,7 @@ async function generateAIResponse(userMessage) {
       const activeKey = getActiveApiKey(apiKeys);
       try {
         if (provider === 'gemini') {
-          replyText = await generateGeminiLiveText({
+          replyText = await generateGeminiText({
             apiKey: activeKey,
             model,
             userMessage,
