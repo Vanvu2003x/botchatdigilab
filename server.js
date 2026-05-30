@@ -410,6 +410,42 @@ function prepareHistoryForAI(history) {
   return result;
 }
 
+// Chuẩn hóa và làm sạch lịch sử hội thoại trước khi gửi cho AI
+// Đảm bảo các vai (role) xen kẽ nhau và bắt đầu bằng 'user' (yêu cầu của Gemini)
+function sanitizeHistoryForAI(messages, provider) {
+  if (!messages || messages.length === 0) return [];
+  
+  const sanitized = [];
+  
+  for (const msg of messages) {
+    const role = msg.role;
+    if (!msg.content || typeof msg.content !== 'string' || !msg.content.trim()) continue;
+    
+    const content = msg.content.trim();
+    
+    if (sanitized.length === 0) {
+      sanitized.push({ role, content });
+    } else {
+      const last = sanitized[sanitized.length - 1];
+      if (last.role === role) {
+        // Gộp tin nhắn trùng vai liền kề bằng dấu xuống dòng
+        last.content += '\n' + content;
+      } else {
+        sanitized.push({ role, content });
+      }
+    }
+  }
+  
+  // Gemini bắt buộc lịch sử hội thoại phải bắt đầu bằng vai 'user'
+  if (provider === 'gemini') {
+    while (sanitized.length > 0 && sanitized[0].role !== 'user') {
+      sanitized.shift();
+    }
+  }
+  
+  return sanitized;
+}
+
 // =============================================
 // MESSAGE DEBOUNCING / GROUPING SYSTEM
 // =============================================
@@ -1329,7 +1365,8 @@ async function generateAIResponse(userMessage, senderId) {
     let conversationMessages = null;
     if (senderId) {
       const history = await getConversationHistory(senderId);
-      conversationMessages = prepareHistoryForAI(history);
+      const rawMessages = prepareHistoryForAI(history);
+      conversationMessages = sanitizeHistoryForAI(rawMessages, provider);
     }
 
     let replyText = null;
