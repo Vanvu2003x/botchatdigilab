@@ -1,0 +1,93 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BotChatSMS - Thiết lập mật khẩu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/auth.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <h1>Thiết lập mật khẩu quản trị</h1>
+      <p>Tạo mật khẩu để khóa dashboard và API quản trị.</p>
+
+      <form id="setup-form">
+        <label for="password">Mật khẩu mới</label>
+        <input id="password" type="password" minlength="6" required autocomplete="new-password" />
+
+        <label for="confirm-password">Nhập lại mật khẩu</label>
+        <input id="confirm-password" type="password" minlength="6" required autocomplete="new-password" />
+
+        <button type="submit" id="submit-btn">Lưu và vào dashboard</button>
+      </form>
+
+      <p id="error" class="error-text"></p>
+    </section>
+  </main>
+
+  <script>
+    const setupForm = document.getElementById('setup-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const errorEl = document.getElementById('error');
+
+    async function bootstrap() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (!data.setupRequired) {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    setupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+
+      const password = document.getElementById('password').value.trim();
+      const confirmPassword = document.getElementById('confirm-password').value.trim();
+
+      if (password.length < 6) {
+        errorEl.textContent = 'Mật khẩu cần tối thiểu 6 ký tự.';
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        errorEl.textContent = 'Mật khẩu nhập lại không khớp.';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Đang lưu...';
+
+      try {
+        const res = await fetch('/api/auth/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+          throw new Error(result.error || 'Không thể thiết lập mật khẩu.');
+        }
+
+        window.location.href = '/';
+      } catch (err) {
+        errorEl.textContent = err.message || 'Thiết lập thất bại.';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Lưu và vào dashboard';
+      }
+    });
+
+    bootstrap();
+  </script>
+</body>
+</html>

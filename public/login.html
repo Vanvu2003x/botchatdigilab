@@ -1,0 +1,87 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BotChatSMS - Đăng nhập</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/auth.css">
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="auth-card">
+      <h1>Đăng nhập quản trị</h1>
+      <p>Nhập mật khẩu để truy cập dashboard hệ thống.</p>
+
+      <form id="login-form">
+        <label for="password">Mật khẩu</label>
+        <input id="password" type="password" required autocomplete="current-password" />
+
+        <button type="submit" id="submit-btn">Đăng nhập</button>
+      </form>
+
+      <p id="error" class="error-text"></p>
+    </section>
+  </main>
+
+  <script>
+    const loginForm = document.getElementById('login-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const errorEl = document.getElementById('error');
+
+    async function bootstrap() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.setupRequired) {
+          window.location.href = '/';
+          return;
+        }
+        if (data.authenticated) {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+
+      const password = document.getElementById('password').value;
+      if (!password) {
+        errorEl.textContent = 'Vui lòng nhập mật khẩu.';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Đang đăng nhập...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+          throw new Error(result.error || 'Đăng nhập thất bại.');
+        }
+
+        window.location.href = '/';
+      } catch (err) {
+        errorEl.textContent = err.message || 'Đăng nhập thất bại.';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Đăng nhập';
+      }
+    });
+
+    bootstrap();
+  </script>
+</body>
+</html>
