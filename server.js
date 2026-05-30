@@ -227,13 +227,55 @@ async function saveConversationToFile(senderId, messages, summary) {
 }
 
 // Flush cache xuống file khi hết TTL 30p
+async function persistConversationEntry(senderId, entry, clearCacheAfterSave = false) {
+  if (!entry) return false;
+  const clonedMessages = Array.isArray(entry.messages) ? entry.messages.map(m => ({ ...m })) : [];
+  await saveConversationToFile(senderId, clonedMessages, entry.summary || '');
+  if (clearCacheAfterSave) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    conversationCache.delete(senderId);
+  }
+  return true;
+}
+
+async function persistAllConversationMemory(clearCacheAfterSave = false) {
+  const senderIds = Array.from(conversationCache.keys());
+  let saved = 0;
+  let failed = 0;
+
+  for (const senderId of senderIds) {
+    const entry = conversationCache.get(senderId);
+    if (!entry) continue;
+    try {
+      await persistConversationEntry(senderId, entry, clearCacheAfterSave);
+      saved++;
+    } catch (err) {
+      failed++;
+      console.error(`[ConvMemory] Persist failed for ${senderId}:`, err.message);
+    }
+  }
+
+  return { saved, failed, cached: conversationCache.size };
+}
+
+async function getConversationMemoryStatus() {
+  const files = await fs.readdir(conversationsDir).catch(() => []);
+  const conversationFiles = files.filter(name => name.endsWith('.json')).length;
+  return {
+    cacheTtlMinutes: Math.round(CACHE_TTL_MS / 60000),
+    cachedConversations: conversationCache.size,
+    conversationFiles
+  };
+}
+
 function flushCacheToFile(senderId) {
   const cached = conversationCache.get(senderId);
   if (!cached) return;
   console.log(`[ConvMemory] Flushing cache to file for ${senderId} (TTL expired)`);
-  saveConversationToFile(senderId, cached.messages, cached.summary)
+  persistConversationEntry(senderId, cached, true)
     .then(() => {
-      conversationCache.delete(senderId);
       console.log(`[ConvMemory] Cache cleared for ${senderId}`);
     })
     .catch(err => {
@@ -297,6 +339,7 @@ async function addMessageToHistory(senderId, role, content) {
   }
 
   resetCacheTTL(senderId);
+  await persistConversationEntry(senderId, history, false);
 }
 
 // Tạo tóm tắt từ lịch sử cũ (trích xuất thông tin quan trọng)
@@ -536,6 +579,29 @@ io.use((socket, next) => {
 // Socket connection debugging
 io.on('connection', (socket) => {
   console.log('Socket client connected:', socket.id);
+});
+
+let isShuttingDown = false;
+async function persistConversationMemoryOnShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  try {
+    console.log(`[ConvMemory] Received ${signal}. Persisting conversation cache before exit...`);
+    const result = await persistAllConversationMemory(false);
+    console.log(`[ConvMemory] Shutdown persist done. Saved=${result.saved}, Failed=${result.failed}, Cached=${result.cached}`);
+  } catch (err) {
+    console.error('[ConvMemory] Shutdown persist error:', err.message);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => {
+  persistConversationMemoryOnShutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  persistConversationMemoryOnShutdown('SIGTERM');
 });
 
 app.get(['/', '/index.html'], async (req, res) => {
@@ -2388,6 +2454,33 @@ app.post('/api/system/status', async (req, res) => {
     return res.json({ success: true, botEnabled });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to update system status.' });
+  }
+});
+
+app.get('/api/memory/status', async (req, res) => {
+  try {
+    const status = await getConversationMemoryStatus();
+    return res.json(status);
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to read memory status.' });
+  }
+});
+
+app.post('/api/memory/persist', async (req, res) => {
+  try {
+    const result = await persistAllConversationMemory(false);
+    await logActivity({
+      direction: 'system',
+      platform: 'system',
+      type: 'system',
+      sender: 'Admin',
+      recipient: 'Database',
+      text: `Lưu bộ nhớ hội thoại thủ công: saved=${result.saved}, failed=${result.failed}.`,
+      status: result.failed > 0 ? 'failed' : 'success'
+    });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to persist conversation memory.' });
   }
 });
 

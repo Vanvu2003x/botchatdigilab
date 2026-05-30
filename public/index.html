@@ -664,6 +664,28 @@
                   </label>
                 </div>
               </div>
+
+              <div class="form-group" style="background: rgba(0,0,0,0.15); padding: 18px 20px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); margin-bottom: 0;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
+                  <div style="flex: 1; min-width: 240px;">
+                    <label style="margin-bottom: 4px; font-size: 14px; font-weight: 600; display: block;">Bộ nhớ hội thoại</label>
+                    <span style="font-size: 11.5px; color: var(--text-muted); line-height: 1.45; display: block;">
+                      Dữ liệu ngữ cảnh được lưu ở RAM và file. Bấm nút bên phải trước khi deploy để đảm bảo đồng bộ ngay.
+                    </span>
+                  </div>
+                  <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="refresh-memory-btn" onclick="refreshMemoryStatus()">
+                      <i class="fa-solid fa-rotate"></i> Làm mới
+                    </button>
+                    <button type="button" class="btn btn-primary btn-sm" id="persist-memory-btn" onclick="persistConversationMemory()">
+                      <i class="fa-solid fa-floppy-disk"></i> Lưu dữ liệu nhớ
+                    </button>
+                  </div>
+                </div>
+                <div id="memory-status-text" style="margin-top: 10px; font-size: 12px; color: var(--text-secondary);">
+                  Đang tải trạng thái bộ nhớ...
+                </div>
+              </div>
               
               <!-- System buttons -->
               <div style="display: flex; gap: 16px; margin-top: 10px;">

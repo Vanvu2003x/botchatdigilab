@@ -22,6 +22,7 @@ const tabDesc = document.getElementById('current-tab-desc');
 document.addEventListener('DOMContentLoaded', async () => {
   setupNavigation();
   await loadSystemStatus();
+  await refreshMemoryStatus(true);
   await loadConfig();
   await loadLogs();
   await loadKnowledge();
@@ -44,6 +45,63 @@ async function loadSystemStatus(silent = false) {
     applySystemStatus(data.botEnabled !== false);
   } catch (err) {
     if (!silent) showToast('Không thể tải trạng thái hệ thống.', 'error');
+  }
+}
+
+function renderMemoryStatus(data) {
+  const target = document.getElementById('memory-status-text');
+  if (!target) return;
+  if (!data || typeof data !== 'object') {
+    target.textContent = 'Không có dữ liệu trạng thái bộ nhớ.';
+    return;
+  }
+  const ttl = Number(data.cacheTtlMinutes || 0);
+  const cached = Number(data.cachedConversations || 0);
+  const files = Number(data.conversationFiles || 0);
+  target.textContent = `Cache RAM: ${cached} hội thoại | File đã lưu: ${files} | TTL RAM: ${ttl} phút`;
+}
+
+async function refreshMemoryStatus(silent = false) {
+  try {
+    const res = await fetch('/api/memory/status');
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Không thể tải trạng thái bộ nhớ.');
+    }
+    renderMemoryStatus(data);
+  } catch (err) {
+    if (!silent) {
+      showToast(err.message || 'Không thể tải trạng thái bộ nhớ.', 'error');
+    }
+  }
+}
+
+async function persistConversationMemory() {
+  const persistBtn = document.getElementById('persist-memory-btn');
+  const refreshBtn = document.getElementById('refresh-memory-btn');
+  if (persistBtn) persistBtn.disabled = true;
+  if (refreshBtn) refreshBtn.disabled = true;
+  try {
+    const res = await fetch('/api/memory/persist', { method: 'POST' });
+    if (res.status === 401) {
+      window.location.href = '/';
+      return;
+    }
+    const result = await res.json();
+    if (!res.ok) {
+      throw new Error(result.error || 'Không thể lưu dữ liệu nhớ.');
+    }
+    showToast(`Đã lưu bộ nhớ hội thoại (${result.saved} hội thoại).`, 'success');
+    await refreshMemoryStatus(true);
+  } catch (err) {
+    showToast(err.message || 'Lỗi khi lưu dữ liệu nhớ.', 'error');
+  } finally {
+    if (persistBtn) persistBtn.disabled = false;
+    if (refreshBtn) refreshBtn.disabled = false;
   }
 }
 
