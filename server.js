@@ -1562,7 +1562,15 @@ async function addRegistration({ name, phone, platform, customerId, text }) {
     if (exists) {
       exists.lastTimestamp = new Date().toISOString();
       exists.text = text;
+      if (customerId) {
+        exists.customerId = customerId;
+      }
       await fs.writeJson(registrationsPath, list);
+      
+      // Trigger AI summary in background
+      if (customerId) {
+        updateRegistrationNoteWithAI(customerId).catch(err => console.error('AI Summary Background Error:', err));
+      }
       return false; 
     }
     
@@ -1574,7 +1582,8 @@ async function addRegistration({ name, phone, platform, customerId, text }) {
       customerId,
       text,
       timestamp: new Date().toISOString(),
-      status: 'Chờ tư vấn'
+      status: 'Chờ tư vấn',
+      note: 'Đang tóm tắt thông tin...'
     };
     list.unshift(newReg);
     await fs.writeJson(registrationsPath, list);
@@ -1582,10 +1591,115 @@ async function addRegistration({ name, phone, platform, customerId, text }) {
     if (typeof io !== 'undefined') {
       io.emit('registration_added', newReg);
     }
+
+    // Trigger AI summary in background
+    if (customerId) {
+      updateRegistrationNoteWithAI(customerId).catch(err => console.error('AI Summary Background Error:', err));
+    }
     return newReg;
   } catch (err) {
     console.error('Failed to add registration:', err);
     return false;
+  }
+}
+
+// Tự động tóm tắt thông tin khách hàng bằng AI từ lịch sử hội thoại
+async function updateRegistrationNoteWithAI(customerId) {
+  try {
+    const list = await fs.readJson(registrationsPath).catch(() => []);
+    const reg = list.find(r => r.customerId === customerId);
+    if (!reg) return;
+
+    const history = await getConversationHistory(customerId);
+    if (!history || !history.messages || history.messages.length === 0) return;
+
+    const config = await readMainConfig();
+    if (!config.ai || !config.ai.apiKey) return;
+
+    const { provider, model, baseUrl, apiKey } = config.ai;
+    const apiKeys = apiKey.split(',').map(k => k.trim()).filter(Boolean);
+    if (apiKeys.length === 0) return;
+    const activeKey = getActiveApiKey(apiKeys);
+
+    // Xây dựng lịch sử hội thoại thành văn bản
+    const historyText = history.messages
+      .map(m => `${m.role === 'user' ? 'Khách hàng' : 'AI Chatbot'}: ${m.content}`)
+      .join('\n');
+
+    const summaryPrompt = `Bạn là trợ lý dữ liệu khách hàng. Hãy đọc lịch sử hội thoại dưới đây giữa khách hàng và Trung tâm giáo dục công nghệ (Robotics, Lập trình STEM).
+Nhiệm vụ của bạn là trích xuất và tóm tắt lại các thông tin của khách hàng theo định dạng ngắn gọn sau:
+- Họ tên/Tên xưng hô:
+- Số điện thoại:
+- Địa chỉ:
+- Thông tin về con (Tên con, tuổi con, lớp mấy):
+- Kinh nghiệm lập trình (đã học qua chưa):
+- Ghi chú khác/Nhu cầu quan tâm:
+
+Chỉ trích xuất thông tin CÓ THỰC trong cuộc hội thoại. KHÔNG tự bịa ra thông tin hoặc giả định.
+Nếu thông tin nào không được đề cập trong cuộc hội thoại, hãy ghi là "Chưa rõ" hoặc "Không đề cập".
+Hãy trả về kết quả dưới dạng các dòng gạch đầu dòng ngắn gọn, rõ ràng. Không ghi thêm lời chào hay giải thích nào khác.
+
+Lịch sử cuộc hội thoại:
+${historyText}`;
+
+    let summaryText = '';
+    if (provider === 'gemini') {
+      summaryText = await generateGeminiText({
+        apiKey: activeKey,
+        model,
+        userMessage: summaryPrompt,
+        systemPrompt: "Bạn là trợ lý dữ liệu trích xuất thông tin khách hàng chính xác và trung thực.",
+        timeoutMs: 25000
+      });
+    } else {
+      let endpoint = '';
+      if (provider === 'openai') {
+        endpoint = 'https://api.openai.com/v1/chat/completions';
+      } else if (provider === 'deepseek') {
+        endpoint = 'https://api.deepseek.com/v1/chat/completions';
+      } else if (provider === 'custom') {
+        if (!baseUrl) throw new Error('Base URL is required for custom OpenAI compatible provider.');
+        const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        endpoint = `${cleanBaseUrl}/chat/completions`;
+      }
+
+      const payload = {
+        model,
+        messages: [
+          { role: 'system', content: "Bạn là trợ lý dữ liệu trích xuất thông tin khách hàng chính xác và trung thực." },
+          { role: 'user', content: summaryPrompt }
+        ]
+      };
+
+      const response = await axios.post(endpoint, payload, {
+        headers: {
+          'Authorization': `Bearer ${activeKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 25000
+      });
+
+      if (response.data?.choices?.[0]?.message?.content) {
+        summaryText = response.data.choices[0].message.content.trim();
+      }
+    }
+
+    if (summaryText) {
+      // Đọc lại danh sách mới nhất để tránh tranh chấp ghi đè
+      const freshList = await fs.readJson(registrationsPath).catch(() => []);
+      const freshReg = freshList.find(r => r.customerId === customerId);
+      if (freshReg) {
+        freshReg.note = summaryText;
+        await fs.writeJson(registrationsPath, freshList);
+        
+        if (typeof io !== 'undefined') {
+          io.emit('registration_updated', freshReg);
+        }
+        console.log(`[AI Summary] Đã tự động cập nhật ghi chú AI cho ${freshReg.name} (${freshReg.phone})`);
+      }
+    }
+  } catch (err) {
+    console.error('Lỗi khi tự động tóm tắt thông tin đăng ký bằng AI:', err.message);
   }
 }
 
@@ -1736,6 +1850,9 @@ Có khách hàng vừa để lại số điện thoại đăng ký học!
         
         // Chạy phân loại trạng thái khách hàng bằng AI trong nền (không làm chậm phản hồi)
         classifyThreadStatus(senderId, platform).catch(err => console.error('[AI Classification Error]:', err));
+        
+        // Tự động tóm tắt thông tin đăng ký bằng AI trong nền
+        updateRegistrationNoteWithAI(senderId).catch(err => console.error('[AI Note Summary Error]:', err));
       }
     } catch (aiErr) {
       console.error('AI Fallback error in webhook:', aiErr.message);
@@ -1917,13 +2034,14 @@ app.get('/api/registrations', async (req, res) => {
 app.put('/api/registrations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, note } = req.body;
     const list = await fs.readJson(registrationsPath).catch(() => []);
     const item = list.find(r => r.id === id);
     if (!item) {
       return res.status(404).json({ error: 'Không tìm thấy lượt đăng ký.' });
     }
-    item.status = status;
+    if (status !== undefined) item.status = status;
+    if (note !== undefined) item.note = note;
     await fs.writeJson(registrationsPath, list);
     
     // Notify all admin clients via socket
@@ -1933,7 +2051,31 @@ app.put('/api/registrations/:id', async (req, res) => {
     
     res.json({ success: true, registration: item });
   } catch (err) {
-    res.status(500).json({ error: 'Không thể cập nhật trạng thái đăng ký.' });
+    res.status(500).json({ error: 'Không thể cập nhật lượt đăng ký.' });
+  }
+});
+
+app.post('/api/registrations/:id/summarize', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const list = await fs.readJson(registrationsPath).catch(() => []);
+    const item = list.find(r => r.id === id);
+    if (!item) {
+      return res.status(404).json({ error: 'Không tìm thấy lượt đăng ký.' });
+    }
+    if (!item.customerId) {
+      return res.status(400).json({ error: 'Lượt đăng ký này không có mã khách hàng liên kết để tóm tắt.' });
+    }
+    
+    await updateRegistrationNoteWithAI(item.customerId);
+    
+    // Đọc lại từ tệp để trả về nội dung mới nhất
+    const updatedList = await fs.readJson(registrationsPath).catch(() => []);
+    const updatedItem = updatedList.find(r => r.id === id);
+    
+    res.json({ success: true, note: updatedItem ? updatedItem.note : '' });
+  } catch (err) {
+    res.status(500).json({ error: `Không thể tóm tắt: ${err.message}` });
   }
 });
 

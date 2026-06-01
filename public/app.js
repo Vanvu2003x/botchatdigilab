@@ -1592,7 +1592,7 @@ function renderRegistrationsList(list) {
   container.innerHTML = '';
   
   if (!list || list.length === 0) {
-    container.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px; font-size: 13px;">Chưa ghi nhận lượt đăng ký học nào.</td></tr>`;
+    container.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px; font-size: 13px;">Chưa ghi nhận lượt đăng ký học nào.</td></tr>`;
     return;
   }
   
@@ -1624,11 +1624,31 @@ function renderRegistrationsList(list) {
     if (item.status === 'Đã chốt đơn') statusSelectClass = 'select-status-success';
     if (item.status === 'Từ chối') statusSelectClass = 'select-status-danger';
 
+    const noteText = item.note || 'Chưa có thông tin ghi chú.';
+
     tr.innerHTML = `
       <td style="padding: 14px 16px; font-weight: 600;">${escapeHtml(item.name)}</td>
       <td style="padding: 14px 16px; font-weight: 500; color: var(--primary-light);">${escapeHtml(item.phone)}</td>
       <td style="padding: 14px 16px;">${platformBadge}</td>
-      <td style="padding: 14px 16px; color: var(--text-secondary); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.text)}">${escapeHtml(item.text)}</td>
+      <td style="padding: 14px 16px; color: var(--text-secondary); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.text)}">${escapeHtml(item.text)}</td>
+      
+      <!-- Ghi chú AI Tóm tắt -->
+      <td style="padding: 14px 16px; color: var(--text-secondary); max-width: 280px; font-size: 12px; line-height: 1.4;">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div style="white-space: pre-line; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); font-size: 11px; color: var(--text-secondary);" id="note-text-${item.id}">
+            ${escapeHtml(noteText)}
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn btn-sm btn-secondary" onclick="triggerAISummarize('${item.id}', this)" title="Yêu cầu AI quét hội thoại và tóm tắt lại" style="padding: 2px 6px; font-size: 10px; display: inline-flex; align-items: center; gap: 4px; border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.03); color: var(--text-secondary); cursor: pointer;">
+              <i class="fa-solid fa-robot" style="color: var(--primary-light);"></i> AI Tóm tắt lại
+            </button>
+            <button class="btn btn-sm btn-secondary" onclick="editRegistrationNote('${item.id}')" title="Sửa ghi chú thủ công" style="padding: 2px 6px; font-size: 10px; display: inline-flex; align-items: center; gap: 4px; border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.03); color: var(--text-secondary); cursor: pointer;">
+              <i class="fa-solid fa-pen-to-square"></i> Sửa tay
+            </button>
+          </div>
+        </div>
+      </td>
+      
       <td style="padding: 14px 16px; color: var(--text-muted); font-size: 11.5px;">${timeStr}</td>
       <td style="padding: 14px 16px;">
         <select class="custom-select status-select-el ${statusSelectClass}" onchange="changeRegistrationStatus('${item.id}', this.value)" style="margin-bottom: 0; padding: 4px 8px; font-size: 12px; width: 120px; font-weight: 600;">
@@ -1644,6 +1664,159 @@ function renderRegistrationsList(list) {
     
     container.appendChild(tr);
   });
+}
+
+// Hiển thị hộp thoại sửa ghi chú
+function editRegistrationNote(id) {
+  const item = allRegistrations.find(r => r.id === id);
+  if (!item) return;
+  
+  const currentNote = item.note || '';
+  
+  // Thêm styles cho modal nếu chưa có
+  if (!document.getElementById('note-modal-styles')) {
+    const style = document.createElement('style');
+    style.id = 'note-modal-styles';
+    style.innerHTML = `
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  // Tạo modal overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'note-modal-overlay';
+  overlay.style = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease;
+  `;
+  
+  const modal = document.createElement('div');
+  modal.style = `
+    width: 90%;
+    max-width: 500px;
+    background: #1f2022;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    color: #fff;
+    animation: slideUp 0.2s ease;
+  `;
+  
+  modal.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+      <h4 style="margin: 0; font-size: 15px; font-weight: 600; color: #fff;"><i class="fa-solid fa-pen-to-square text-gradient" style="margin-right: 6px;"></i>Chỉnh sửa ghi chú khách hàng</h4>
+      <button onclick="closeNoteModal()" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px;"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <label style="font-size: 12px; color: var(--text-secondary); font-weight: 500;">Khách hàng: <strong style="color: #fff;">${escapeHtml(item.name)}</strong> (${escapeHtml(item.phone)})</label>
+      <textarea id="modal-note-textarea" style="height: 180px; width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 4px; color: #fff; padding: 10px; font-size: 13px; font-family: inherit; resize: none; box-sizing: border-box; outline: none; line-height: 1.4;">${escapeHtml(currentNote)}</textarea>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+      <button class="btn btn-secondary" onclick="closeNoteModal()" style="padding: 6px 12px; font-size: 12px; border-radius: 4px; cursor: pointer;">Hủy</button>
+      <button class="btn btn-primary" id="btn-save-modal-note" onclick="saveRegistrationNote('${id}')" style="padding: 6px 12px; font-size: 12px; border-radius: 4px; cursor: pointer; background: var(--primary-light); color: #fff; border: none;">Lưu ghi chú</button>
+    </div>
+  `;
+  
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  
+  // Focus textarea
+  document.getElementById('modal-note-textarea').focus();
+}
+
+function closeNoteModal() {
+  const overlay = document.getElementById('note-modal-overlay');
+  if (overlay) overlay.remove();
+}
+
+// Lưu ghi chú sửa tay lên Server
+async function saveRegistrationNote(id) {
+  const textarea = document.getElementById('modal-note-textarea');
+  if (!textarea) return;
+  const newNote = textarea.value.trim();
+  const btn = document.getElementById('btn-save-modal-note');
+  
+  btn.disabled = true;
+  btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Đang lưu...`;
+  
+  try {
+    const res = await fetch(`/api/registrations/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: newNote })
+    });
+    
+    if (res.ok) {
+      showToast('Cập nhật ghi chú thành công!', 'success');
+      
+      // Cập nhật mảng local
+      const item = allRegistrations.find(r => r.id === id);
+      if (item) {
+        item.note = newNote;
+        updateRegistrationStats(allRegistrations);
+        filterRegistrations();
+      }
+      closeNoteModal();
+    } else {
+      const data = await res.json();
+      showToast(data.error || 'Không thể lưu ghi chú.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = 'Lưu ghi chú';
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối tới máy chủ.', 'error');
+    btn.disabled = false;
+    btn.innerHTML = 'Lưu ghi chú';
+  }
+}
+
+// Yêu cầu AI tóm tắt lại hội thoại
+async function triggerAISummarize(id, btn) {
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Đang tóm tắt...`;
+  
+  try {
+    const res = await fetch(`/api/registrations/${id}/summarize`, {
+      method: 'POST'
+    });
+    const data = await res.json();
+    
+    if (res.ok) {
+      showToast('AI đã tóm tắt và cập nhật ghi chú thành công!', 'success');
+      
+      // Cập nhật mảng local
+      const item = allRegistrations.find(r => r.id === id);
+      if (item) {
+        item.note = data.note;
+        updateRegistrationStats(allRegistrations);
+        filterRegistrations();
+      }
+    } else {
+      showToast(data.error || 'AI không thể tóm tắt hội thoại.', 'error');
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối tới máy chủ để gọi AI.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
 }
 
 function filterRegistrations() {
